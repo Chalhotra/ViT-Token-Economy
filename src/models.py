@@ -1,28 +1,38 @@
 from __future__ import annotations
-from dataclasses import dataclass
 from typing import Dict
 import torch
 import timm
 
-@dataclass
-class ModelConfig:
-    model_id: str  # e.g. 'vit_tiny_patch16_224' or 'deit_tiny_patch16_224'
-    num_classes: int = 100
-    pretrained: bool = True
+# Import your configs
+from src.configs import ModelConfig
+
+# CRITICAL: Triggers registration of topk_* models in timm
+import src.models_act 
 
 def create_model(cfg: ModelConfig) -> torch.nn.Module:
-    return timm.create_model(cfg.model_id, pretrained=cfg.pretrained)
+    """
+    Factory that handles standard models AND custom pruning models transparently.
+    """
+    
+    # 1. Base arguments for every model
+    model_kwargs = {
+        "pretrained": cfg.pretrained,
+        "num_classes": cfg.num_classes,
+    }
+
+    # 2. Inject Pruning Arguments if they exist
+    if cfg.pruning is not None:
+        # Converts TopKConfig(locs=[3], rates=[0.7]) -> {'pruning_locs': [3], 'keep_rates': [0.7]}
+        # This gets passed to the constructor in models_act.py
+        model_kwargs.update(cfg.pruning.to_kwargs())
+
+    # 3. Create Model
+    # If model_id is 'topk_deit_tiny...', timm uses src.models_act + these kwargs
+    # If model_id is 'resnet50', timm ignores the extra kwargs (or warns)
+    return timm.create_model(cfg.model_id, **model_kwargs)
 
 def shrink_imagenet1k_head_to_imagenet100(model: torch.nn.Module, new_to_old_map: Dict[int, int], num_classes: int = 100) -> torch.nn.Module:
-    """Replace 1000-way head with 100-way head, copying weights per new_to_old_map.
-
-    Functionality matches the notebook exactly:
-    - model starts with a 1000-class head
-    - we create new Linear(in_features, 100)
-    - fill weights/biases by copying rows old_idx -> new_idx
-    """
-    # timm models expose classifier via get_classifier in many cases,
-    # but the notebook uses .head. We'll support both without changing behavior.
+    # (Same implementation as before)
     head = getattr(model, "head", None)
     if head is None:
         head = model.get_classifier()
@@ -45,12 +55,10 @@ def shrink_imagenet1k_head_to_imagenet100(model: torch.nn.Module, new_to_old_map
             if old_bias is not None:
                 new_head.bias[new_idx].copy_(old_bias[old_idx])
 
-    # assign back
     if hasattr(model, "head"):
         model.head = new_head
     else:
         model.reset_classifier(num_classes=num_classes)
-        # ensure it is set
         model.get_classifier().load_state_dict(new_head.state_dict())
 
     return model
