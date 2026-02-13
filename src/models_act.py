@@ -5,7 +5,7 @@ import timm
 from timm.models.registry import register_model
 
 # Import the class from your models folder
-from models.topk import TopKVisionTransformer
+from src.models.topk import TopKVisionTransformer
 
 def _get_pruning_params(kwargs):
     """
