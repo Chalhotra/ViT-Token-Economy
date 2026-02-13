@@ -9,7 +9,7 @@ from src.eval import evaluate_accuracy_latency_throughput, compute_gflops
 
 # Import new config structure
 from src.configs import ModelConfig, TopKConfig, EViTConfig
-from src.models import create_model, shrink_imagenet1k_head_to_imagenet100
+from src.models_smthing import create_model, shrink_imagenet1k_head_to_imagenet100
 
 def main():
     ap = argparse.ArgumentParser()
