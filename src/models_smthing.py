@@ -6,7 +6,7 @@ import timm
 # Import your configs
 from src.configs import ModelConfig
 
-# CRITICAL: Triggers registration of topk_* models in timm
+# CRITICAL: Triggers registration of custom models in timm
 import src.models_act 
 
 def create_model(cfg: ModelConfig) -> torch.nn.Module:
@@ -22,13 +22,14 @@ def create_model(cfg: ModelConfig) -> torch.nn.Module:
 
     # 2. Inject Pruning Arguments if they exist
     if cfg.pruning is not None:
-        # Converts TopKConfig(locs=[3], rates=[0.7]) -> {'pruning_locs': [3], 'keep_rates': [0.7]}
-        # This gets passed to the constructor in models_act.py
+        # For topk models: converts TopKConfig(pruning_locs=[3], keep_rates=[0.7]) 
+        # -> {'pruning_locs': [3], 'keep_rates': [0.7]}
+        # These get passed to the topk model constructors in models_act.py
         model_kwargs.update(cfg.pruning.to_kwargs())
 
     # 3. Create Model
-    # If model_id is 'topk_deit_tiny...', timm uses src.models_act + these kwargs
-    # If model_id is 'resnet50', timm ignores the extra kwargs (or warns)
+    # If model_id is 'topk_deit_tiny_patch16_224', timm uses src.models_act registration + these kwargs
+    # If model_id is a standard timm model, it ignores the extra kwargs
     return timm.create_model(cfg.model_id, **model_kwargs)
 
 def shrink_imagenet1k_head_to_imagenet100(model: torch.nn.Module, new_to_old_map: Dict[int, int], num_classes: int = 100) -> torch.nn.Module:
