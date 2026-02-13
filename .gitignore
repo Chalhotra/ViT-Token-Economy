@@ -17,3 +17,5 @@ checkpoints/
 # local env
 .venv/
 .env
+
+github_pat.txt
