@@ -20,7 +20,25 @@ def build_transform_for_model(model):
     return create_transform(**cfg, is_training=False)
 
 def load_imagenet100_split(cfg: DataConfig):
-    return load_dataset(cfg.dataset_id, split=cfg.split)
+    """Load ImageNet-100 dataset from Hugging Face.
+    
+    Args:
+        cfg: DataConfig with dataset_id and split
+        
+    Returns:
+        The loaded dataset
+        
+    Raises:
+        Exception: If dataset loading fails
+    """
+    try:
+        return load_dataset(cfg.dataset_id, split=cfg.split)
+    except Exception as e:
+        raise Exception(
+            f"Failed to load dataset '{cfg.dataset_id}' (split: '{cfg.split}'). "
+            f"Please check your internet connection and dataset availability. "
+            f"Original error: {e}"
+        ) from e
 
 def apply_timm_preprocess(ds, transform):
     """Matches notebook behavior: map transforms ahead of DataLoader."""

@@ -5,3 +5,4 @@ datasets
 requests
 tqdm
 fvcore
+pytest
