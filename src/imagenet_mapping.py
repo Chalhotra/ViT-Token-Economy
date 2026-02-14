@@ -24,7 +24,9 @@ def _get_session_with_retries(retries: int = 3, backoff_factor: float = 0.3) -> 
         total=retries,
         backoff_factor=backoff_factor,
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
+        allowed_methods=["GET"],
+        # Also retry on connection errors
+        raise_on_status=False
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)

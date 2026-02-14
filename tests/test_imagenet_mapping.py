@@ -31,8 +31,9 @@ def test_imagenet100_wnids_are_strings():
     """Test that WNIDs are strings."""
     maps = build_imagenet100_to_1k_map()
     assert all(isinstance(wnid, str) for wnid in maps.imagenet100_wnids)
-    # WNIDs should be in format like 'n01440764'
-    assert all(wnid.startswith('n') and len(wnid) == 9 for wnid in maps.imagenet100_wnids)
+    # WNIDs should be in format: 'n' followed by 8 digits (e.g., 'n01440764')
+    WNID_LENGTH = 9  # 'n' + 8 digits
+    assert all(wnid.startswith('n') and len(wnid) == WNID_LENGTH for wnid in maps.imagenet100_wnids)
 
 
 def test_mapping_consistency():

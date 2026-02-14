@@ -26,11 +26,12 @@ def create_model(cfg: ModelConfig) -> torch.nn.Module:
         model = timm.create_model(cfg.model_id, pretrained=cfg.pretrained)
         return model
     except Exception as e:
-        available_models = timm.list_models(pretrained=cfg.pretrained)[:10]
+        # Show a few example models (avoid listing all thousands)
+        example_models = "vit_tiny_patch16_224, deit_tiny_patch16_224, resnet50, etc."
         raise RuntimeError(
             f"Failed to create model '{cfg.model_id}'. "
             f"Please check the model name. "
-            f"Some available models: {', '.join(available_models)}... "
+            f"Example available models: {example_models} "
             f"Original error: {e}"
         ) from e
 
