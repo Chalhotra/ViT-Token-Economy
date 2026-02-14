@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+
+# experiment artifacts
+experiments/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.log
+
+# local env
+.venv/
+.env

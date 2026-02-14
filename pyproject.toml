@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vit-deit-baselines"
+version = "0.1.0"
+description = "Clean baseline eval pipeline for ViT-Tiny and DeiT-Tiny on ImageNet-100."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "torch",
+  "torchvision",
+  "timm",
+  "datasets",
+  "requests",
+  "tqdm",
+  "fvcore"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
