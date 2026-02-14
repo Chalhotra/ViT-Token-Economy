@@ -1,8 +1,10 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Set, Union
+from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
+import math
 import torch
 import torch.nn as nn
 
@@ -10,205 +12,231 @@ import torch.nn as nn
 @dataclass(frozen=True)
 class TopKConfig:
     enabled: bool = False
-    keep_rate: float = 1.0  # fraction of patch tokens to keep (CLS always kept)
-    layers: Union[str, Iterable[int]] = "all"  # "all" or iterable of 0-based block indices
-    score: str = "cls_attn"  # currently supported: "cls_attn"
-    preserve_token_order: bool = True  # keep tokens in original order after selection
+
+    # Reference-style controls:
+    keep_rate: Sequence[float] = (1.0,)          # e.g. [0.7] or [0.9,0.8,...]
+    reduction_loc: Sequence[int] = tuple()       # e.g. [3,6,9]
+    # If keep_rate has length 1 and reduction_loc has >1, exponentiate:
+    # token_ratio[i] = keep_rate[0] ** (idx+1), exactly like your reference.
+    exponentiate_single_keep_rate: bool = True
+
+    # Minor options:
+    sorted_topk: bool = True                     # reference uses sorted=True
+    init_n_override: Optional[int] = None        # if you ever want to force init_n
 
 
-class AttentionWithCache(nn.Module):
+class AttentionTopKFromExisting(nn.Module):
     """
-    Drop-in replacement for timm Attention modules that caches the attention
-    matrix (after softmax, before dropout) as `last_attn` with shape [B, H, N, N].
-
-    This reimplements the common timm attention forward:
-      qkv -> reshape -> scaled dot-product -> softmax -> (attn @ v) -> proj
-    using the *same* underlying parameters/modules from the original attention.
+    Reference-aligned Attention_TopK that:
+      - reuses the original timm attention weights/modules (qkv/proj/drop)
+      - caches attention and returns (x_attn, index, idx) like the reference
+      - uses absolute budget: left_tokens = int(keep_rate * init_n)
     """
-    def __init__(self, attn: nn.Module):
+
+    def __init__(self, attn: nn.Module, dim: int, keep_rate: float, init_n: int, num_special_tokens: int, sorted_topk: bool = True):
         super().__init__()
-        # Keep references to the original submodules/params to avoid divergence.
-        self.qkv = attn.qkv
         self.num_heads = attn.num_heads
-        self.scale = attn.scale
+        self.scale = getattr(attn, "scale", (dim // attn.num_heads) ** -0.5)
+        self.sorted_topk = bool(sorted_topk)
+
+        # Reuse trained modules:
+        self.qkv = attn.qkv
         self.attn_drop = attn.attn_drop
         self.proj = attn.proj
         self.proj_drop = attn.proj_drop
 
-        self.last_attn: Optional[torch.Tensor] = None
+        self.keep_rate = float(keep_rate)
+        assert 0.0 < self.keep_rate <= 1.0, f"keep_rate must be in (0,1], got {self.keep_rate}"
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # init_n = original number of patch tokens (e.g., 14*14 = 196 for 224/16)
+        self.init_n = int(init_n)
+        self.num_special_tokens = int(num_special_tokens)  # 1 (cls) or 2 (cls+dist)
+        self.last_index: Optional[torch.Tensor] = None  # [B, K, C]
+        self.last_idx: Optional[torch.Tensor] = None    # [B, K]
+
+    def forward(self, x: torch.Tensor, attn_mask=None) -> torch.Tensor:
+        """
+        Returns:
+          x_attn: [B, N, C]
+          index:  [B, left_tokens, C] gather index for patch tokens only (None if no pruning)
+          idx:    [B, left_tokens] indices into patch-token sequence (None if no pruning)
+        """
         B, N, C = x.shape
-        qkv = self.qkv(x)  # [B, N, 3*C]
-        # [3, B, H, N, head_dim]
-        qkv = qkv.reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # each: [B, H, N, head_dim]
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # [B, H, N, N]
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
-
-        # Cache *pre-dropout* softmax attention for scoring
-        self.last_attn = attn
-
         attn = self.attn_drop(attn)
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)  # [B, N, C]
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
 
+        if attn_mask is not None:
+          attn = attn + attn_mask
 
-def _normalize_layers(layers: Union[str, Iterable[int]], num_blocks: int) -> Set[int]:
-    if layers == "all":
-        return set(range(num_blocks))
-    out = set(int(i) for i in layers)
-    # silently clamp to valid range
-    return {i for i in out if 0 <= i < num_blocks}
+        x_attn = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x_attn = self.proj(x_attn)
+        x_attn = self.proj_drop(x_attn)
 
+        if self.keep_rate >= 1.0:
+            return x_attn, None, None
 
-def _topk_gather_tokens(
-    x: torch.Tensor,
-    scores: torch.Tensor,
-    keep_rate: float,
-    preserve_token_order: bool,
-) -> torch.Tensor:
+        # Absolute budget based on original patch grid (reference behavior)
+        left_tokens = int(self.keep_rate * self.init_n)
+
+        # Current patch count may already be smaller due to earlier pruning
+        cur_patches = N - self.num_special_tokens
+        if cur_patches <= 1:
+            return x_attn, None, None
+
+        # If budget matches what we currently have, skip pruning
+        if left_tokens >= cur_patches:
+            return x_attn, None, None
+
+        left_tokens = max(1, left_tokens)
+
+        # Score patches by CLS attention to patches (exclude special tokens)
+        # attn: [B, H, N, N]
+        cls_attn = attn[:, :, 0, self.num_special_tokens:]          # [B, H, cur_patches]
+        cls_attn = cls_attn.mean(dim=1)                             # [B, cur_patches]
+
+        _, idx = torch.topk(
+            cls_attn,
+            k=left_tokens,
+            dim=1,
+            largest=True,
+            sorted=True,  # reference uses sorted=True
+        )                                                           # [B, left_tokens]
+
+        self.last_idx = idx
+        self.last_index = idx.unsqueeze(-1).expand(-1, -1, C)  # [B, K, C]
+        return x_attn
+
+class BlockTopKAdapter(nn.Module):
     """
-    x: [B, N, C] tokens with CLS at index 0
-    scores: [B, N-1] patch scores aligned to x[:, 1:, :]
-    Returns pruned x with CLS + topK patches.
+    timm Block-compatible adapter (supports drop_path1/drop_path2 and ls1/ls2).
+    Prunes immediately after attention residual, matching the reference.
     """
-    B, N, C = x.shape
-    num_patches = N - 1
-    if num_patches <= 1:
-        return x
 
-    keep_rate = float(keep_rate)
-    if keep_rate >= 1.0:
-        return x
-    if keep_rate <= 0.0:
-        # keep only CLS
-        return x[:, :1, :]
-
-    K = int(torch.ceil(torch.tensor(num_patches * keep_rate)).item())
-    K = max(1, min(K, num_patches))
-
-    topk_idx = scores.topk(K, dim=-1, largest=True, sorted=False).indices  # [B, K], in [0..num_patches-1]
-    if preserve_token_order:
-        topk_idx, _ = torch.sort(topk_idx, dim=-1)  # restore original spatial/token order
-
-    gather_idx = torch.cat(
-        [
-            torch.zeros((B, 1), dtype=topk_idx.dtype, device=topk_idx.device),
-            topk_idx + 1,  # shift by 1 because patches start at token index 1
-        ],
-        dim=1,
-    )  # [B, K+1]
-
-    # gather along token dimension
-    gather_idx_exp = gather_idx.unsqueeze(-1).expand(-1, -1, C)  # [B, K+1, C]
-    x_pruned = torch.gather(x, dim=1, index=gather_idx_exp)
-    return x_pruned
-
-
-class TopKWrapper(nn.Module):
-    """
-    Wraps a timm ViT/DeiT-like model and performs topK pruning between transformer blocks.
-
-    Requirements for the wrapped model:
-      - has .patch_embed, .pos_drop, .blocks (iterable), .norm
-      - has .cls_token, .pos_embed
-      - exposes .head or classifier in forward
-    """
-    def __init__(self, model: nn.Module, cfg: TopKConfig):
+    def __init__(
+        self,
+        orig_block: nn.Module,
+        embed_dim: int,
+        keep_rate: float,
+        init_n: int,
+        num_special_tokens: int,
+    ):
         super().__init__()
-        self.model = model
-        self.cfg = cfg
+        self.norm1 = orig_block.norm1
+        self.norm2 = orig_block.norm2
+        self.mlp = orig_block.mlp
 
-        if not hasattr(model, "blocks"):
-            raise TypeError("TopKWrapper expects a ViT/DeiT-style model with `.blocks`")
+        # timm v0.9+ uses these names
+        self.drop_path1 = getattr(orig_block, "drop_path1", nn.Identity())
+        self.drop_path2 = getattr(orig_block, "drop_path2", nn.Identity())
 
-        self.layers = _normalize_layers(cfg.layers, num_blocks=len(model.blocks))
+        # LayerScale (can be Identity in some variants)
+        self.ls1 = getattr(orig_block, "ls1", nn.Identity())
+        self.ls2 = getattr(orig_block, "ls2", nn.Identity())
 
-    def __getattr__(self, name: str):
-        # Delegate attribute lookup to underlying model (keeps timm utilities working).
-        if name in {"model", "cfg", "layers"}:
-            return super().__getattr__(name)
-        return getattr(self.model, name)
+        self.num_special_tokens = int(num_special_tokens)
 
-    @torch.no_grad()
-    def _score_tokens(self, block_idx: int, x: torch.Tensor) -> Optional[torch.Tensor]:
-        """
-        Returns scores [B, N-1] for patch tokens using cached attention from that block.
-        """
-        if self.cfg.score != "cls_attn":
-            raise ValueError(f"Unsupported score method: {self.cfg.score}")
+        self.attn = AttentionTopKFromExisting(
+    attn=orig_block.attn,
+    dim=embed_dim,
+    keep_rate=keep_rate,
+    init_n=init_n,
+    num_special_tokens=num_special_tokens,
+    sorted_topk=True,  # or cfg.sorted_topk via apply_topk_pruning
+)
 
-        attn_mod = getattr(self.model.blocks[block_idx], "attn", None)
-        if attn_mod is None or not hasattr(attn_mod, "last_attn") or attn_mod.last_attn is None:
-            # If we can't access cached attention, skip pruning (safe fallback)
-            return None
 
-        attn = attn_mod.last_attn  # [B, H, N, N]
-        # CLS -> patches attention, mean over heads
-        scores = attn[:, :, 0, 1:].mean(dim=1)  # [B, N-1]
-        return scores
+    def forward(self, x: torch.Tensor, attn_mask=None) -> torch.Tensor:
+        attn_out = self.attn(self.norm1(x), attn_mask=attn_mask)
+        x = x + self.drop_path1(self.ls1(attn_out))
 
-    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        m = self.model
+        index = self.attn.last_index
+        if index is not None:
+            special = x[:, : self.num_special_tokens]
+            patches = x[:, self.num_special_tokens :]
+            kept = torch.gather(patches, dim=1, index=index)
+            x = torch.cat([special, kept], dim=1)
 
-        # This mirrors typical timm VisionTransformer.forward_features()
-        x = m.patch_embed(x)
-        # Some timm models return (x, (H, W)) from patch_embed; handle that.
-        if isinstance(x, (tuple, list)):
-            x = x[0]
+        x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
+        return x
 
-        B = x.shape[0]
-        cls_tokens = m.cls_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
-        x = x + m.pos_embed
-        x = m.pos_drop(x)
+def _compute_token_ratio_full(depth: int, cfg: TopKConfig) -> List[float]:
+    keep_rate = list(float(x) for x in cfg.keep_rate)
+    pruning_loc = list(int(x) for x in cfg.reduction_loc)
 
-        for i, blk in enumerate(m.blocks):
-            x = blk(x)
+    if not pruning_loc:
+        return [1.0 for _ in range(depth)]
 
-            if (i in self.layers) and self.cfg.enabled and (self.cfg.keep_rate < 1.0):
-                scores = self._score_tokens(i, x)
-                if scores is not None:
-                    x = _topk_gather_tokens(
-                        x,
-                        scores=scores,
-                        keep_rate=self.cfg.keep_rate,
-                        preserve_token_order=self.cfg.preserve_token_order,
-                    )
+    # Reference behavior: if single keep_rate and multiple locs -> exponentiate
+    if len(keep_rate) == 1 and len(pruning_loc) > 1 and cfg.exponentiate_single_keep_rate:
+        base = keep_rate[0]
+        keep_rate = [base ** (i + 1) for i in range(len(pruning_loc))]
 
-        x = m.norm(x)
-        # Most timm ViTs use CLS token as feature
-        return x[:, 0]
+    if len(keep_rate) != len(pruning_loc):
+        raise ValueError(f"Mismatch: reduction_loc={pruning_loc} vs keep_rate={keep_rate}")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        feats = self.forward_features(x)
-        # timm VisionTransformer usually has `head`
-        if hasattr(self.model, "head"):
-            return self.model.head(feats)
-        # fallback to timm classifier getter
-        cls = self.model.get_classifier()
-        return cls(feats)
+    token_ratio_full = [1.0 for _ in range(depth)]
+    for r, loc in zip(keep_rate, pruning_loc):
+        if 0 <= loc < depth:
+            token_ratio_full[loc] = float(r)
+    return token_ratio_full
 
 
 def apply_topk_pruning(model: nn.Module, cfg: TopKConfig) -> nn.Module:
     """
-    In-place patch: replace each block.attn with AttentionWithCache so we can score tokens.
-    Then return a wrapper that performs pruning between blocks.
+    In-place transform: replaces model.blocks[i] with BlockTopKAdapter at all depths,
+    with keep_rate schedule matching the reference (token_ratio_full).
+    Off => returns model unchanged.
 
-    If cfg.enabled is False, returns the model unchanged.
+    IMPORTANT: Call this AFTER you shrink the head for ImageNet100 (as you already do),
+    to keep concerns separated.
     """
-    if not cfg.enabled or cfg.keep_rate >= 1.0:
+    if not cfg.enabled:
         return model
 
     if not hasattr(model, "blocks"):
-        raise TypeError("apply_topk_pruning expects a ViT/DeiT-style model with `.blocks`")
+        raise TypeError("TopK pruning expects a timm ViT/DeiT-like model with `.blocks`")
 
-    for blk in model.blocks:
-        if hasattr(blk, "attn") and not isinstance(blk.attn, AttentionWithCache):
-            blk.attn = AttentionWithCache(blk.attn)
+    depth = len(model.blocks)
+    token_ratio_full = _compute_token_ratio_full(depth, cfg)
 
-    return TopKWrapper(model, cfg)
+    # Determine init_n (original patch tokens)
+    if cfg.init_n_override is not None:
+        init_n = int(cfg.init_n_override)
+    else:
+        if not hasattr(model, "patch_embed") or not hasattr(model.patch_embed, "num_patches"):
+            raise TypeError("Model missing patch_embed.num_patches; cannot infer init_n")
+        init_n = int(model.patch_embed.num_patches)
+
+    # Special tokens: CLS always, dist token optionally
+    num_special_tokens = 2 if hasattr(model, "dist_token") and model.dist_token is not None else 1
+
+    # If all keep rates are 1.0, do nothing (keeps baseline identical)
+    if all(abs(r - 1.0) < 1e-12 for r in token_ratio_full):
+        return model
+
+    # Replace blocks with adapters (reuse original weights/modules)
+    for i in range(depth):
+      keep_r = float(token_ratio_full[i])
+      if keep_r >= 1.0:
+          continue  # leave original block untouched
+
+      orig_blk = model.blocks[i]
+      embed_dim = getattr(model, "embed_dim", None)
+      if embed_dim is None:
+          embed_dim = orig_blk.norm1.normalized_shape[0]
+
+      model.blocks[i] = BlockTopKAdapter(
+          orig_block=orig_blk,
+          embed_dim=int(embed_dim),
+          keep_rate=keep_r,
+          init_n=init_n,
+          num_special_tokens=num_special_tokens,
+      )
+
+
+    return model

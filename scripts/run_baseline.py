@@ -8,7 +8,13 @@ from src.models import ModelConfig, create_model, shrink_imagenet1k_head_to_imag
 from src.data import DataConfig, load_imagenet100_split, build_transform_for_model, apply_timm_preprocess, build_loader
 from src.eval import evaluate_accuracy_latency_throughput, compute_gflops
 
-from src.pruning import TopKConfig, apply_topk_pruning  # NEW
+from src.test_models.topk import TopKConfig, apply_topk_pruning  # NEW
+
+def _parse_int_list(s: str) -> list[int]:
+    s = s.strip()
+    if not s:
+        return []
+    return [int(x) for x in s.split(",") if x.strip() != ""]
 
 
 def _parse_layers(s: str):
@@ -28,9 +34,24 @@ def main():
 
     # TopK pruning flags (NEW)
     ap.add_argument("--topk", action="store_true", help="enable Top-K token pruning")
-    ap.add_argument("--keep-rate", type=float, default=1.0, help="fraction of patch tokens kept (CLS always kept)")
-    ap.add_argument("--topk-layers", type=str, default="all", help='block indices to prune after: "all" or comma list, e.g. "2,5,8"')
-    ap.add_argument("--preserve-token-order", action="store_true", help="keep selected tokens in original order (recommended)")
+    ap.add_argument(
+        "--keep-rate",
+        nargs="+",
+        type=float,
+        default=[1.0],
+        help="keep rates; one value or list aligned with --reduction-loc (reference behavior supported)",
+    )
+    ap.add_argument(
+        "--reduction-loc",
+        type=str,
+        default="",
+        help='comma-separated block indices where pruning is applied, e.g. "3,6,9"',
+    )
+    ap.add_argument(
+        "--no-exp-keep-rate",
+        action="store_true",
+        help="disable reference behavior where single keep-rate is exponentiated across reduction locations",
+    )
 
     args = ap.parse_args()
 
@@ -43,12 +64,11 @@ def main():
     model = create_model(ModelConfig(model_id=args.model, pretrained=True))
     model = shrink_imagenet1k_head_to_imagenet100(model, maps.new_to_old_map, num_classes=100)
 
-    # Apply TopK (feature toggle, orthogonal)
     topk_cfg = TopKConfig(
         enabled=bool(args.topk),
-        keep_rate=float(args.keep_rate),
-        layers=_parse_layers(args.topk_layers),
-        preserve_token_order=bool(args.preserve_token_order),
+        keep_rate=list(args.keep_rate),
+        reduction_loc=_parse_int_list(args.reduction_loc),
+        exponentiate_single_keep_rate=not bool(args.no_exp_keep_rate),
     )
     model = apply_topk_pruning(model, topk_cfg)
 

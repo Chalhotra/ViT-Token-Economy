@@ -1,0 +1,7 @@
+torch
+torchvision
+timm
+datasets
+requests
+tqdm
+fvcore
