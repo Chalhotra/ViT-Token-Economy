@@ -170,10 +170,15 @@ def _compute_token_ratio_full(depth: int, cfg: TopKConfig) -> List[float]:
     if not pruning_loc:
         return [1.0 for _ in range(depth)]
 
-    # Reference behavior: if single keep_rate and multiple locs -> exponentiate
-    if len(keep_rate) == 1 and len(pruning_loc) > 1 and cfg.exponentiate_single_keep_rate:
-        base = keep_rate[0]
-        keep_rate = [base ** (i + 1) for i in range(len(pruning_loc))]
+    # Handle single keep_rate with multiple reduction locations
+    if len(keep_rate) == 1 and len(pruning_loc) > 1:
+        if cfg.exponentiate_single_keep_rate:
+            # Reference behavior: exponentiate
+            base = keep_rate[0]
+            keep_rate = [base ** (i + 1) for i in range(len(pruning_loc))]
+        else:
+            # Replicate the same value across all locations
+            keep_rate = [keep_rate[0] for _ in range(len(pruning_loc))]
 
     if len(keep_rate) != len(pruning_loc):
         raise ValueError(f"Mismatch: reduction_loc={pruning_loc} vs keep_rate={keep_rate}")
