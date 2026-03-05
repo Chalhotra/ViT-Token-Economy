@@ -10,8 +10,8 @@ class DataConfig:
     dataset_id: str = "clane9/imagenet-100"
     split: str = "validation"
     batch_size: int = 64
-    num_workers: int = 4
-    pin_memory: bool = True
+    num_workers: int = 2
+    pin_memory: bool = False
     shuffle: bool = False  # eval: keep False
 
 def build_transform_for_model(model):

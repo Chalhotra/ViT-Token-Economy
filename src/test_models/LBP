@@ -1,0 +1,18 @@
+LBP
+├── .gitignore
+├── README.md
+├── notebooks
+│   └── 01_baseline.ipynb
+├── pyproject.toml
+├── requirements.txt
+├── scripts
+│   └── run_baseline.py
+├── src
+│   ├── __init__.py
+│   ├── data.py
+│   ├── eval.py
+│   ├── imagenet_mapping.py
+│   ├── models.py
+│   ├── topk.py
+│   └── utils.py
+└── topk.py
