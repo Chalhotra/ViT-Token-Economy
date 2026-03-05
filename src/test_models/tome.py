@@ -322,6 +322,14 @@ class BlockToMeAdapter(nn.Module):
 
             x, new_size = merge_wavg(merge, x, attn_size)
 
+            # Debug: print token counts before/after merge
+            cur_patches_before = t_orig - self.num_special_tokens
+            cur_patches_after = x.shape[1] - self.num_special_tokens
+            print(
+                f"N={t_orig} cur_patches_before={cur_patches_before} "
+                f"r={self.r} cur_patches_after={cur_patches_after}"
+            )
+
             self._attn_size       = new_size
             self.last_cluster_idx = cluster_idx
 
