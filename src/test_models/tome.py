@@ -225,13 +225,14 @@ class AttentionToMeFromExisting(nn.Module):
 
 class BlockToMeAdapter(nn.Module):
     """
-    timm Block-compatible adapter that implements ToMe token merging:
-      - runs attention and collects the mean-key metric
-      - applies bipartite soft matching to merge r token pairs
-      - uses weighted-average merge (merge_wavg) to preserve information
-      - tracks cluster assignments (merge_source) when viz_mode is active
+    timm Block-compatible adapter that implements ToMe token merging.
 
-    Drop-path / LayerScale handled identically to the other adapters.
+    Returns only `x` so it is a drop-in replacement inside timm's standard
+    `for blk in self.blocks: x = blk(x)` loop.
+
+    attn_size (proportional attention) is propagated across ToMe blocks via a
+    `_prev_tome_block` back-reference set by `apply_tome_merging` — no changes
+    to the host model's forward loop are needed.
     """
 
     def __init__(
@@ -255,9 +256,9 @@ class BlockToMeAdapter(nn.Module):
         self.ls1 = getattr(orig_block, "ls1", nn.Identity())
         self.ls2 = getattr(orig_block, "ls2", nn.Identity())
 
-        self.r                 = int(r)
+        self.r                  = int(r)
         self.num_special_tokens = int(num_special_tokens)
-        self.prop_attn         = bool(prop_attn)
+        self.prop_attn          = bool(prop_attn)
 
         self.attn = AttentionToMeFromExisting(
             attn=orig_block.attn,
@@ -265,71 +266,68 @@ class BlockToMeAdapter(nn.Module):
             num_special_tokens=num_special_tokens,
         )
 
-        # Cached for viz_mode / external inspection
-        self.last_cluster_idx: Optional[torch.Tensor] = None  # [B, N_merged]
+        # Linked to the previous ToMe block (if any) by apply_tome_merging so
+        # we can read the accumulated attn_size it produced.
+        self._prev_tome_block: Optional["BlockToMeAdapter"] = None
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        attn_size: Optional[torch.Tensor] = None,
-        attn_mask=None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        # State written after each forward; read by the next ToMe block.
+        self._attn_size: Optional[torch.Tensor] = None
+
+        # Viz cache
+        self.last_cluster_idx: Optional[torch.Tensor] = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            x:         [B, N, C]
-            attn_size: [B, N, 1] accumulated token sizes (None = all ones)
-        Returns:
-            x:               [B, N - r, C]   (r pairs merged)
-            attn_size:       [B, N - r, 1]   updated sizes  (or None if r==0)
-            cluster_idx:     [B, N - r]      source token assignments for viz
-                             (or None if no merging)
+        Accepts and returns only `x` — compatible with timm's block loop.
+        attn_size is read from the previous ToMe block's cached state and
+        written back to self._attn_size for the next block to consume.
         """
+        # --- Retrieve attn_size from the previous ToMe block (if any) ---
+        attn_size: Optional[torch.Tensor] = (
+            self._prev_tome_block._attn_size
+            if self._prev_tome_block is not None
+            else None
+        )
+
         # --- Attention ---
         size_input = attn_size if self.prop_attn else None
-        x_attn, metric = self.attn(self.norm1(x), size=size_input, attn_mask=attn_mask)
+        x_attn, metric = self.attn(self.norm1(x), size=size_input)
         x = x + self.drop_path1(self.ls1(x_attn))
 
-        # Reset viz cache
+        # Reset caches
         self.last_cluster_idx = None
-        cluster_idx = None
+        self._attn_size       = attn_size  # will be updated below if merging
 
         # --- ToMe merging ---
         if self.r > 0:
-            class_token  = self.num_special_tokens >= 1
+            class_token   = self.num_special_tokens >= 1
             distill_token = self.num_special_tokens >= 2
 
             merge, _ = bipartite_soft_matching(
                 metric, self.r, class_token, distill_token
             )
 
-            # Track cluster assignments for viz
-            source = merge_source(merge, x, None)  # [B, T, T]
-            # For each merged token, find which original index it came from
-            # (matches reference: argmax over the source rows weighted by position)
-            t = source.shape[1]
-            positions = torch.arange(1, t + 1, device=x.device).float()
-            weighted = source * positions[None, None, :]   # [B, T_new, T_orig]  ← after merge
-            # We need source AFTER merge, so merge it first
-            source_merged = merge(source, mode="amax")     # [B, T_new, T_orig]
-            positions_merged = (
+            # Viz: build cluster assignment BEFORE x is merged
+            t_orig = x.shape[1]
+            source_merged = merge_source(merge, x, None)  # [B, T_new, T_orig]
+            cluster_idx = (
                 source_merged
-                * torch.arange(1, t + 1, device=x.device).float()[None, None, :]
-            )
-            cluster_idx = positions_merged.amax(dim=-1)   # [B, T_new]
+                * torch.arange(1, t_orig + 1, device=x.device).float()[None, None, :]
+            ).amax(dim=-1)  # [B, T_new]
 
             if class_token:
-                cluster_idx = cluster_idx - 2
-                cluster_idx = cluster_idx[:, 1:]          # drop CLS
+                cluster_idx = (cluster_idx - 2)[:, 1:]   # drop CLS column
             else:
                 cluster_idx = cluster_idx - 1
 
-            x, attn_size = merge_wavg(merge, x, attn_size)
+            x, new_size = merge_wavg(merge, x, attn_size)
+
+            self._attn_size       = new_size
             self.last_cluster_idx = cluster_idx
 
         # --- MLP ---
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
-
-        return x, attn_size, cluster_idx
+        return x
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +437,14 @@ def apply_tome_merging(model: nn.Module, cfg: ToMeConfig) -> nn.Module:
             num_special_tokens=num_special_tokens,
             prop_attn=cfg.prop_attn,
         )
+
+    # Wire prev-block references so attn_size propagates between ToMe blocks
+    # without touching the host model's forward loop.
+    prev: Optional[BlockToMeAdapter] = None
+    for blk in model.blocks:
+        if isinstance(blk, BlockToMeAdapter):
+            blk._prev_tome_block = prev
+            prev = blk
 
     # Attach flags for forward-pass helpers
     model._tome_viz_mode  = cfg.viz_mode
