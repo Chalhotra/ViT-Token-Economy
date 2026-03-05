@@ -66,11 +66,11 @@ class AttentionTopKFromExisting(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
+        if attn_mask is not None:
+          attn = attn + attn_mask
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        if attn_mask is not None:
-          attn = attn + attn_mask
 
         x_attn = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x_attn = self.proj(x_attn)
