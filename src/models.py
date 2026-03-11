@@ -11,7 +11,29 @@ class ModelConfig:
     pretrained: bool = True
 
 def create_model(cfg: ModelConfig) -> torch.nn.Module:
-    return timm.create_model(cfg.model_id, pretrained=cfg.pretrained)
+    """Create a model using timm.
+    
+    Args:
+        cfg: ModelConfig with model_id and pretrained flag
+        
+    Returns:
+        The created model
+        
+    Raises:
+        RuntimeError: If model creation fails (e.g., invalid model_id)
+    """
+    try:
+        model = timm.create_model(cfg.model_id, pretrained=cfg.pretrained)
+        return model
+    except Exception as e:
+        # Show a few example models (avoid listing all thousands)
+        example_models = "vit_tiny_patch16_224, deit_tiny_patch16_224, resnet50, etc."
+        raise RuntimeError(
+            f"Failed to create model '{cfg.model_id}'. "
+            f"Please check the model name. "
+            f"Example available models: {example_models} "
+            f"Original error: {e}"
+        ) from e
 
 def shrink_imagenet1k_head_to_imagenet100(model: torch.nn.Module, new_to_old_map: Dict[int, int], num_classes: int = 100) -> torch.nn.Module:
     """Replace 1000-way head with 100-way head, copying weights per new_to_old_map.
