@@ -43,13 +43,13 @@ import torch.nn as nn
 # ---------------------------------------------------------------------------
 # Re-use building blocks from the two existing modules
 # ---------------------------------------------------------------------------
-from evit import (
+from .evit import (
     AttentionEViTFromExisting,
     complement_idx,
     EVITConfig,
     _compute_token_ratio_full as _evit_token_ratio_full,
 )
-from tome import (
+from .tome import (
     bipartite_soft_matching,
     merge_wavg,
     merge_source,
