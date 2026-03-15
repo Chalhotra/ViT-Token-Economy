@@ -239,7 +239,7 @@ class BlockToMeAdapter(nn.Module):
         self,
         orig_block: nn.Module,
         embed_dim: int,
-        r: int,
+        keep_rate: float,
         num_special_tokens: int,
         prop_attn: bool = True,
     ):
@@ -256,7 +256,7 @@ class BlockToMeAdapter(nn.Module):
         self.ls1 = getattr(orig_block, "ls1", nn.Identity())
         self.ls2 = getattr(orig_block, "ls2", nn.Identity())
 
-        self.r                  = int(r)
+        self.keep_rate          = float(keep_rate)
         self.num_special_tokens = int(num_special_tokens)
         self.prop_attn          = bool(prop_attn)
 
@@ -299,12 +299,21 @@ class BlockToMeAdapter(nn.Module):
         self._attn_size       = attn_size  # will be updated below if merging
 
         # --- ToMe merging ---
-        if self.r > 0:
+        cur_patches = x.shape[1] - self.num_special_tokens
+        if cur_patches > 1 and self.keep_rate < 1.0:
+            left_tokens = math.ceil(self.keep_rate * cur_patches)
+            left_tokens = max(1, left_tokens)
+            r = cur_patches - left_tokens
+
+            if r <= 0:
+                x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
+                return x
+
             class_token   = self.num_special_tokens >= 1
             distill_token = self.num_special_tokens >= 2
 
             merge, _ = bipartite_soft_matching(
-                metric, self.r, class_token, distill_token
+                metric, r, class_token, distill_token
             )
 
             # Viz: build cluster assignment BEFORE x is merged
@@ -322,14 +331,6 @@ class BlockToMeAdapter(nn.Module):
 
             x, new_size = merge_wavg(merge, x, attn_size)
 
-            # Debug: print token counts before/after merge
-            cur_patches_before = t_orig - self.num_special_tokens
-            cur_patches_after = x.shape[1] - self.num_special_tokens
-            print(
-                f"N={t_orig} cur_patches_before={cur_patches_before} "
-                f"r={self.r} cur_patches_after={cur_patches_after}"
-            )
-
             self._attn_size       = new_size
             self.last_cluster_idx = cluster_idx
 
@@ -342,18 +343,16 @@ class BlockToMeAdapter(nn.Module):
 # Schedule helpers  (mirrors evit.py / topk.py exactly)
 # ---------------------------------------------------------------------------
 
-def _compute_r_full(depth: int, cfg: ToMeConfig, init_n: int) -> List[int]:
+def _compute_keep_rate_full(depth: int, cfg: ToMeConfig) -> List[float]:
     """
-    Convert keep_rate schedule → per-block r (number of token pairs to merge).
-
-    The reference computes r[loc] = prev_n_tokens - target_n_tokens so that
-    after merging, exactly target_n_tokens patch tokens remain.
+    Convert keep_rate/reduction_loc config into a full per-block keep-rate list.
+    Blocks not in reduction_loc get keep_rate=1.0 (no merge).
     """
     keep_rate  = [float(x) for x in cfg.keep_rate]
     pruning_loc = [int(x)  for x in cfg.reduction_loc]
 
     if not pruning_loc:
-        return [0] * depth
+        return [1.0] * depth
 
     if len(keep_rate) == 1 and len(pruning_loc) > 1:
         if cfg.exponentiate_single_keep_rate:
@@ -367,17 +366,12 @@ def _compute_r_full(depth: int, cfg: ToMeConfig, init_n: int) -> List[int]:
             f"Mismatch: reduction_loc={pruning_loc} vs keep_rate={keep_rate}"
         )
 
-    # Target token counts per pruning location
-    target_counts = [int(init_n * r) for r in keep_rate]
-
-    r_full = [0] * depth
-    prev_n = init_n
-    for i, loc in enumerate(pruning_loc):
+    keep_rate_full = [1.0] * depth
+    for r, loc in zip(keep_rate, pruning_loc):
         if 0 <= loc < depth:
-            r_full[loc] = prev_n - target_counts[i]
-            prev_n = target_counts[i]
+            keep_rate_full[loc] = float(r)
 
-    return r_full
+    return keep_rate_full
 
 
 # ---------------------------------------------------------------------------
@@ -404,19 +398,7 @@ def apply_tome_merging(model: nn.Module, cfg: ToMeConfig) -> nn.Module:
 
     depth = len(model.blocks)
 
-    if cfg.init_n_override is not None:
-        init_n = int(cfg.init_n_override)
-    else:
-        if not hasattr(model, "patch_embed") or not hasattr(
-            model.patch_embed, "num_patches"
-        ):
-            raise TypeError(
-                "Model missing patch_embed.num_patches; cannot infer init_n. "
-                "Set ToMeConfig.init_n_override explicitly."
-            )
-        init_n = int(model.patch_embed.num_patches)
-
-    r_full = _compute_r_full(depth, cfg, init_n)
+    keep_rate_full = _compute_keep_rate_full(depth, cfg)
 
     num_special_tokens = (
         2
@@ -424,13 +406,13 @@ def apply_tome_merging(model: nn.Module, cfg: ToMeConfig) -> nn.Module:
         else 1
     )
 
-    # Nothing to do if all r values are 0
-    if all(r == 0 for r in r_full):
+    # Nothing to do if all keep-rates are 1.0
+    if all(abs(r - 1.0) < 1e-12 for r in keep_rate_full):
         return model
 
     for i in range(depth):
-        r = r_full[i]
-        if r <= 0:
+        keep_rate = float(keep_rate_full[i])
+        if keep_rate >= 1.0:
             continue  # leave original block untouched
 
         orig_blk  = model.blocks[i]
@@ -441,7 +423,7 @@ def apply_tome_merging(model: nn.Module, cfg: ToMeConfig) -> nn.Module:
         model.blocks[i] = BlockToMeAdapter(
             orig_block=orig_blk,
             embed_dim=int(embed_dim),
-            r=r,
+            keep_rate=keep_rate,
             num_special_tokens=num_special_tokens,
             prop_attn=cfg.prop_attn,
         )

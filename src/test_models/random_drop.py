@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
+import math
 import torch
 import timm
 import torch.nn as nn
@@ -84,18 +85,16 @@ class PrunedViT(nn.Module):
         x = x + self.model.pos_embed
         x = self.model.pos_drop(x)
 
-        # Calculate original_num_patch_tokens based on actual num_special_tokens
-        original_num_patch_tokens = x.shape[1] - self.num_special_tokens
-
         prune_stage = 0
 
         for i, blk in enumerate(self.model.blocks):
             x = blk(x)
 
             if i in self.prune_layers:
-                # Calculate the target number of patches to keep based on the original count
+                # Progressive pruning: budget is based on current patch count.
                 keep_ratio = self.keep_ratios[prune_stage]
-                target_k_for_this_stage = int(original_num_patch_tokens * keep_ratio)
+                cur_patch_tokens = x.shape[1] - self.num_special_tokens
+                target_k_for_this_stage = math.ceil(keep_ratio * cur_patch_tokens)
                 x = self.random_prune(x, target_k_for_this_stage)
                 prune_stage += 1
 

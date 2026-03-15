@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, Optional, Any
+from typing import Dict, Optional
 import time
 import torch
 from fvcore.nn import FlopCountAnalysis, flop_count_table

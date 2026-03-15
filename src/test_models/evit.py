@@ -1,6 +1,8 @@
+#  my evit
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import List, Optional, Sequence, Tuple
 
 import torch
@@ -68,7 +70,7 @@ class AttentionEViTFromExisting(nn.Module):
     EViT-style attention that reuses trained timm attention weights and:
       - returns the full attended output x_attn
       - caches (last_index, last_idx, last_cls_attn) for the block to use
-      - computes absolute budget: left_tokens = int(keep_rate * init_n)
+    - computes progressive budget: left_tokens = ceil(keep_rate * cur_patches)
       - when keep_rate >= 1.0, passes through unchanged (index/idx/cls_attn = None)
     """
 
@@ -138,11 +140,15 @@ class AttentionEViTFromExisting(nn.Module):
         if self.keep_rate >= 1.0:
             return x_attn
 
-        # Absolute budget (reference behaviour)
-        left_tokens = int(self.keep_rate * self.init_n)
-
         cur_patches = N - self.num_special_tokens
         if cur_patches <= 1:
+            return x_attn
+
+        # Match reference behavior with progressive pruning.
+        left_tokens = math.ceil(self.keep_rate * cur_patches)
+
+        # Reference early-exit: budget keeps all current patches.
+        if left_tokens == cur_patches:
             return x_attn
 
         # Nothing to prune if budget already met

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import argparse
-import torch
 
 from src.utils import get_device, seed_everything, num_params
 from src.imagenet_mapping import build_imagenet100_to_1k_map
@@ -8,22 +7,13 @@ from src.models import ModelConfig, create_model, shrink_imagenet1k_head_to_imag
 from src.data import DataConfig, load_imagenet100_split, build_transform_for_model, apply_timm_preprocess, build_loader
 from src.eval import evaluate_accuracy_latency_throughput, compute_gflops
 
-from src.test_models.topk import TopKConfig, apply_topk_pruning  # NEW
+from src.test_models.topk import TopKConfig, apply_topk_pruning
 
 def _parse_int_list(s: str) -> list[int]:
     s = s.strip()
     if not s:
         return []
     return [int(x) for x in s.split(",") if x.strip() != ""]
-
-
-def _parse_layers(s: str):
-    if s.strip().lower() == "all":
-        return "all"
-    if not s.strip():
-        return "all"
-    return [int(x) for x in s.split(",") if x.strip() != ""]
-
 
 def main():
     ap = argparse.ArgumentParser()
