@@ -21,3 +21,13 @@ checkpoints/
 notebooks/script.py
 github_pat.txt
 notebooks/script.py
+
+# LaTeX build artifacts
+*.aux
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+*.synctex.gz
+presentation.pdf
