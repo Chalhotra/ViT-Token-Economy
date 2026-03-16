@@ -18,5 +18,5 @@ checkpoints/
 # local env
 .venv/
 .env
-
+notebooks/script.py
 github_pat.txt
