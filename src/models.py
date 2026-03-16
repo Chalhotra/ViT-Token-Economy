@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Dict
 import torch
 import timm
-import torch.nn as nn
 
 @dataclass
 class ModelConfig:

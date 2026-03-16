@@ -54,7 +54,7 @@ from .tome import (
     merge_wavg,
     merge_source,
     ToMeConfig,
-    _compute_r_full as _tome_r_full,
+    _compute_keep_rate_full as _tome_keep_rate_full,
 )
 
 
@@ -203,8 +203,8 @@ class AttentionHybridFromExisting(nn.Module):
 
         # EViT: populate caches if pruning is requested
         if self.evit_keep_rate < 1.0:
-            left_tokens = int(self.evit_keep_rate * self.init_n)
             cur_patches = N - self.num_special_tokens
+            left_tokens = math.ceil(self.evit_keep_rate * cur_patches)
 
             if cur_patches > 1 and left_tokens < cur_patches:
                 left_tokens = max(1, left_tokens)
@@ -241,7 +241,7 @@ class BlockHybridAdapter(nn.Module):
 
     Either or both stages can be disabled per block:
       - Set evit_keep_rate = 1.0  to skip EViT fusion in this block.
-      - Set r = 0               to skip ToMe merging in this block.
+            - Set tome_keep_rate = 1.0 to skip ToMe merging in this block.
 
     attn_size propagation (ToMe prop_attn) is handled via _prev_hybrid_block,
     wired by apply_evit_tome_pruning — no changes to the host model's forward.
@@ -252,7 +252,7 @@ class BlockHybridAdapter(nn.Module):
         orig_block: nn.Module,
         embed_dim: int,
         evit_keep_rate: float,          # 1.0 → EViT stage inactive
-        tome_r: int,                    # 0   → ToMe stage inactive
+        tome_keep_rate: float,          # 1.0 → ToMe stage inactive
         init_n: int,
         num_special_tokens: int,
         sorted_topk: bool = True,
@@ -269,7 +269,7 @@ class BlockHybridAdapter(nn.Module):
         self.ls2 = getattr(orig_block, "ls2", nn.Identity())
 
         self.num_special_tokens = int(num_special_tokens)
-        self.tome_r             = int(tome_r)
+        self.tome_keep_rate     = float(tome_keep_rate)
         self.prop_attn          = bool(prop_attn)
 
         self.attn = AttentionHybridFromExisting(
@@ -369,12 +369,21 @@ class BlockHybridAdapter(nn.Module):
         # ----------------------------------------------------------------
         # Stage 2: ToMe token merging
         # ----------------------------------------------------------------
-        if self.tome_r > 0:
+        cur_patches_for_tome = x.shape[1] - self.num_special_tokens
+        if cur_patches_for_tome > 1 and self.tome_keep_rate < 1.0:
+            left_tokens = math.ceil(self.tome_keep_rate * cur_patches_for_tome)
+            left_tokens = max(1, left_tokens)
+            r = cur_patches_for_tome - left_tokens
+
+            if r <= 0:
+                x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
+                return x
+
             class_token   = self.num_special_tokens >= 1
             distill_token = self.num_special_tokens >= 2
 
             merge, _ = bipartite_soft_matching(
-                metric, self.tome_r, class_token, distill_token
+                metric, r, class_token, distill_token
             )
 
             # Viz: cluster assignment before merge
@@ -408,11 +417,11 @@ def _build_schedules(
     depth: int,
     cfg: EVITToMeConfig,
     init_n: int,
-) -> Tuple[List[float], List[int]]:
+) -> Tuple[List[float], List[float]]:
     """
     Returns:
         evit_ratio_full: per-block EViT keep-rate  (1.0 → inactive)
-        tome_r_full:     per-block ToMe r value    (0   → inactive)
+        tome_keep_full:  per-block ToMe keep-rate (1.0 → inactive)
     """
     # --- EViT schedule ---
     if cfg.evit_enabled and cfg.evit_reduction_loc:
@@ -435,15 +444,11 @@ def _build_schedules(
             exponentiate_single_keep_rate=cfg.tome_exponentiate,
             prop_attn=cfg.tome_prop_attn,
         )
-        # _tome_r_full expects init_n from the *original* token count,
-        # but EViT may have already reduced tokens by the time ToMe fires.
-        # We compute r relative to the original init_n; bipartite_soft_matching
-        # will clamp r to (cur_tokens - S) // 2 automatically.
-        tome_r_full = _tome_r_full(depth, tome_cfg, init_n)
+        tome_keep_full = _tome_keep_rate_full(depth, tome_cfg)
     else:
-        tome_r_full = [0] * depth
+        tome_keep_full = [1.0] * depth
 
-    return evit_ratio_full, tome_r_full
+    return evit_ratio_full, tome_keep_full
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +507,7 @@ def apply_evit_tome_pruning(model: nn.Module, cfg: EVITToMeConfig) -> nn.Module:
         if tome_init_n is None:
             tome_init_n = patch_n
 
-    evit_ratio_full, tome_r_full = _build_schedules(depth, cfg, tome_init_n)
+    evit_ratio_full, tome_keep_full = _build_schedules(depth, cfg, tome_init_n)
 
     num_special_tokens = (
         2
@@ -512,16 +517,16 @@ def apply_evit_tome_pruning(model: nn.Module, cfg: EVITToMeConfig) -> nn.Module:
 
     # Check if there is anything to do at all
     evit_active = any(abs(r - 1.0) > 1e-12 for r in evit_ratio_full)
-    tome_active = any(r > 0 for r in tome_r_full)
+    tome_active = any(abs(r - 1.0) > 1e-12 for r in tome_keep_full)
     if not evit_active and not tome_active:
         return model
 
     # Replace blocks that have at least one active stage
     for i in range(depth):
         evit_kr = float(evit_ratio_full[i])
-        tome_r  = int(tome_r_full[i])
+        tome_keep = float(tome_keep_full[i])
 
-        if evit_kr >= 1.0 and tome_r <= 0:
+        if evit_kr >= 1.0 and tome_keep >= 1.0:
             continue  # leave original block untouched
 
         orig_blk  = model.blocks[i]
@@ -533,7 +538,7 @@ def apply_evit_tome_pruning(model: nn.Module, cfg: EVITToMeConfig) -> nn.Module:
             orig_block=orig_blk,
             embed_dim=int(embed_dim),
             evit_keep_rate=evit_kr,
-            tome_r=tome_r,
+            tome_keep_rate=tome_keep,
             init_n=evit_init_n,
             num_special_tokens=num_special_tokens,
             sorted_topk=cfg.evit_sorted_topk,

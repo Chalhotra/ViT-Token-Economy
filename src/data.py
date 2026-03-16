@@ -1,6 +1,5 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from timm.data import resolve_data_config, create_transform

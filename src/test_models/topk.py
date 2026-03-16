@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence
 
 import math
 import torch
@@ -26,10 +26,10 @@ class TopKConfig:
 
 class AttentionTopKFromExisting(nn.Module):
     """
-    Reference-aligned Attention_TopK that:
+        Reference-aligned Attention_TopK that:
       - reuses the original timm attention weights/modules (qkv/proj/drop)
       - caches attention and returns (x_attn, index, idx) like the reference
-      - uses absolute budget: left_tokens = int(keep_rate * init_n)
+            - uses progressive budget: left_tokens = ceil(keep_rate * cur_patches)
     """
 
     def __init__(self, attn: nn.Module, dim: int, keep_rate: float, init_n: int, num_special_tokens: int, sorted_topk: bool = True):
@@ -79,15 +79,18 @@ class AttentionTopKFromExisting(nn.Module):
         if self.keep_rate >= 1.0:
             return x_attn, None, None
 
-        # Absolute budget based on original patch grid (reference behavior)
-        left_tokens = int(self.keep_rate * self.init_n)
-
-        # Current patch count may already be smaller due to earlier pruning
+        # Progressive budget based on the current patch count.
         cur_patches = N - self.num_special_tokens
         if cur_patches <= 1:
             return x_attn, None, None
 
-        # If budget matches what we currently have, skip pruning
+        left_tokens = math.ceil(self.keep_rate * cur_patches)
+
+        # Reference-style early exit when budget keeps all current patches.
+        if left_tokens == cur_patches:
+            return x_attn, None, None
+
+        # Safety guard when ceil overshoots in edge cases.
         if left_tokens >= cur_patches:
             return x_attn, None, None
 
@@ -103,7 +106,7 @@ class AttentionTopKFromExisting(nn.Module):
             k=left_tokens,
             dim=1,
             largest=True,
-            sorted=True,  # reference uses sorted=True
+            sorted=self.sorted_topk,
         )                                                           # [B, left_tokens]
 
         self.last_idx = idx
