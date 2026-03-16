@@ -20,3 +20,4 @@ checkpoints/
 .env
 
 github_pat.txt
+notebooks/script.py
