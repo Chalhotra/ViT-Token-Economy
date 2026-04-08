@@ -3,7 +3,13 @@ from dataclasses import dataclass
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from timm.data import resolve_data_config, create_transform
-
+from augmentation import (
+    AugmentationPipeline,
+    all_augmentations,
+    geometric_only,
+    colour_only,
+    no_augmentation,
+)
 @dataclass
 class DataConfig:
     dataset_id: str = "clane9/imagenet-100"
@@ -38,16 +44,22 @@ def load_imagenet100_split(cfg: DataConfig):
             f"Please check your internet connection and dataset availability. "
             f"Original error: {e}"
         ) from e
-
-def apply_timm_preprocess(ds, transform):
-    """Matches notebook behavior: map transforms ahead of DataLoader."""
+def apply_timm_preprocess(ds, transform, aug_pipeline: AugmentationPipeline | None = None):
+    """
+    Matches notebook behavior: map transforms ahead of DataLoader.
+    Optionally runs aug_pipeline on the raw PIL image before timm preprocessing.
+    """
     def preprocess(example):
-        example["pixel_values"] = transform(example["image"].convert("RGB"))
+        img = example["image"].convert("RGB")
+        if aug_pipeline is not None:
+            img = aug_pipeline(img)                   # augment on PIL image
+        example["pixel_values"] = transform(img)      # then timm normalise/resize
         return example
 
     ds2 = ds.map(preprocess, remove_columns=["image"])
     ds2.set_format(type="torch", columns=["pixel_values", "label"])
     return ds2
+
 
 def build_loader(ds, cfg: DataConfig) -> DataLoader:
     return DataLoader(
