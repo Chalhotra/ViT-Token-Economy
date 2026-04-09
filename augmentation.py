@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import random
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
-from PIL import Image, ImageEnhance
+from PIL import Image
 import torchvision.transforms.functional as TF
 import torchvision.transforms as T
 

@@ -10,6 +10,7 @@ from augmentation import (
     colour_only,
     no_augmentation,
 )
+import numpy as np
 @dataclass
 class DataConfig:
     dataset_id: str = "clane9/imagenet-100"
