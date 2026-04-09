@@ -52,10 +52,12 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
         label_names = getattr(label_feature, "names", None)
 
     def preprocess(example, idx):
+        import numpy as np          # local import — survives pickling
+        from PIL import Image
+
         img = example["image"].convert("RGB")
         if aug_pipeline is not None:
             img = aug_pipeline(img)
-        # Store as numpy, NOT as a torch tensor
         example["pixel_values"] = np.array(img)
         example["image_id"] = f"image_{idx:06d}"
         if label_names is not None:
@@ -66,9 +68,12 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
 
     ds2 = ds.map(preprocess, with_indices=True, remove_columns=["image"])
     ds2.set_format("numpy")
-    return ds2, transform  # pass transform out to the collator
+    return ds2, transform
+
 def make_collate_fn(transform):
     def collate_fn(batch):
+        import numpy as np          # local import — survives pickling
+        from PIL import Image
         imgs = [Image.fromarray(b["pixel_values"]) for b in batch]
         pixel_values = torch.stack([transform(img) for img in imgs])
         labels = torch.tensor([b["label"] for b in batch])
