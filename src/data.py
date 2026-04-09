@@ -59,7 +59,7 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
         img = example["image"].convert("RGB")
         if aug_pipeline is not None:
             img = aug_pipeline(img)
-        example["pixel_values"] = np.array(img)
+        example["pixel_values"] = np.array(img, dtype=np.uint8)
         example["image_id"] = f"image_{idx:06d}"
         if label_names is not None:
             example["ground_truth_label"] = label_names[int(example["label"])]
