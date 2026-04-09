@@ -49,15 +49,24 @@ def apply_timm_preprocess(ds, transform, aug_pipeline: AugmentationPipeline | No
     Matches notebook behavior: map transforms ahead of DataLoader.
     Optionally runs aug_pipeline on the raw PIL image before timm preprocessing.
     """
-    def preprocess(example):
+    label_names = None
+    if hasattr(ds, "features") and "label" in ds.features:
+        label_feature = ds.features["label"]
+        label_names = getattr(label_feature, "names", None)
+
+    def preprocess(example, idx):
         img = example["image"].convert("RGB")
         if aug_pipeline is not None:
             img = aug_pipeline(img)                   # augment on PIL image
         example["pixel_values"] = transform(img)      # then timm normalise/resize
+        example["image_id"] = f"image_{idx:06d}"
+        if label_names is not None:
+            example["ground_truth_label"] = label_names[int(example["label"])]
+        else:
+            example["ground_truth_label"] = str(example["label"])
         return example
 
-    ds2 = ds.map(preprocess, remove_columns=["image"])
-    ds2.set_format(type="torch", columns=["pixel_values", "label"])
+    ds2 = ds.map(preprocess, with_indices=True, remove_columns=["image"])
     return ds2
 
 
