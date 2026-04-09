@@ -89,13 +89,41 @@ def make_collate_fn(transform):
     return collate_fn
 
 
+# def build_loader(ds, cfg: DataConfig, collate_fn=None) -> DataLoader:
+#     return DataLoader(
+#         ds,
+#         batch_size=cfg.batch_size,
+#         shuffle=cfg.shuffle,
+#         num_workers=cfg.num_workers,
+#         pin_memory=cfg.pin_memory,
+#         collate_fn=collate_fn,
+#         persistent_workers=cfg.num_workers > 0,
+#     )
+
 def build_loader(ds, cfg: DataConfig, collate_fn=None) -> DataLoader:
+    """Build DataLoader with custom collate function.
+    
+    Args:
+        ds: Preprocessed dataset (from apply_timm_preprocess)
+        cfg: DataConfig with batch_size, num_workers, etc.
+        collate_fn: Custom collate function. If provided, num_workers is forced to 0
+                    (torch multiprocessing doesn't support complex closures).
+    
+    Returns:
+        DataLoader instance
+    """
+    # When using custom collate_fn with closures, must use num_workers=0
+    num_workers = 0 if collate_fn is not None else cfg.num_workers
+    
+    if collate_fn is not None and cfg.num_workers > 0:
+        print(f"⚠️  Warning: Forcing num_workers=0 (custom collate_fn requires single-process)")
+    
     return DataLoader(
         ds,
         batch_size=cfg.batch_size,
         shuffle=cfg.shuffle,
-        num_workers=cfg.num_workers,
+        num_workers=num_workers,
         pin_memory=cfg.pin_memory,
         collate_fn=collate_fn,
-        persistent_workers=cfg.num_workers > 0,
+        persistent_workers=num_workers > 0,
     )
