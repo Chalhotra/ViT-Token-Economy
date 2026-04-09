@@ -44,11 +44,7 @@ def load_imagenet100_split(cfg: DataConfig):
             f"Please check your internet connection and dataset availability. "
             f"Original error: {e}"
         ) from e
-def apply_timm_preprocess(ds, transform, aug_pipeline: AugmentationPipeline | None = None):
-    """
-    Matches notebook behavior: map transforms ahead of DataLoader.
-    Optionally runs aug_pipeline on the raw PIL image before timm preprocessing.
-    """
+def apply_timm_preprocess(ds, transform, aug_pipeline=None):
     label_names = None
     if hasattr(ds, "features") and "label" in ds.features:
         label_feature = ds.features["label"]
@@ -57,8 +53,9 @@ def apply_timm_preprocess(ds, transform, aug_pipeline: AugmentationPipeline | No
     def preprocess(example, idx):
         img = example["image"].convert("RGB")
         if aug_pipeline is not None:
-            img = aug_pipeline(img)                   # augment on PIL image
-        example["pixel_values"] = transform(img)      # then timm normalise/resize
+            img = aug_pipeline(img)
+        # Store as numpy, NOT as a torch tensor
+        example["pixel_values"] = np.array(img)
         example["image_id"] = f"image_{idx:06d}"
         if label_names is not None:
             example["ground_truth_label"] = label_names[int(example["label"])]
@@ -67,14 +64,31 @@ def apply_timm_preprocess(ds, transform, aug_pipeline: AugmentationPipeline | No
         return example
 
     ds2 = ds.map(preprocess, with_indices=True, remove_columns=["image"])
-    return ds2
+    ds2.set_format("numpy")
+    return ds2, transform  # pass transform out to the collator
+def make_collate_fn(transform):
+    def collate_fn(batch):
+        imgs = [Image.fromarray(b["pixel_values"]) for b in batch]
+        pixel_values = torch.stack([transform(img) for img in imgs])
+        labels = torch.tensor([b["label"] for b in batch])
+        image_ids = [b["image_id"] for b in batch]
+        ground_truth_labels = [b["ground_truth_label"] for b in batch]
+        return {
+            "pixel_values": pixel_values,
+            "label": labels,
+            "image_id": image_ids,
+            "ground_truth_label": ground_truth_labels,
+        }
+    return collate_fn
 
 
-def build_loader(ds, cfg: DataConfig) -> DataLoader:
+def build_loader(ds, cfg: DataConfig, collate_fn=None) -> DataLoader:
     return DataLoader(
         ds,
         batch_size=cfg.batch_size,
         shuffle=cfg.shuffle,
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
+        collate_fn=collate_fn,
+        persistent_workers=cfg.num_workers > 0,
     )
