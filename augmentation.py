@@ -1,21 +1,12 @@
 from __future__ import annotations
-
-from dataclasses import dataclass
-
+import random
 import numpy as np
-import torch
-from datasets import load_dataset
+from dataclasses import dataclass
+from typing import Sequence
 from PIL import Image
-from timm.data import resolve_data_config, create_transform
-from torch.utils.data import DataLoader
+import torchvision.transforms.functional as TF
+import torchvision.transforms as T
 
-from augmentation import (
-    AugmentationPipeline,
-    all_augmentations,
-    geometric_only,
-    colour_only,
-    no_augmentation,
-)
 
 # ──────────────────────────────────────────────
 # Base class

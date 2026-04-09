@@ -1,5 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
+import torch
+import numpy as np
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from timm.data import resolve_data_config, create_transform
@@ -10,7 +12,6 @@ from augmentation import (
     colour_only,
     no_augmentation,
 )
-import numpy as np
 @dataclass
 class DataConfig:
     dataset_id: str = "clane9/imagenet-100"
