@@ -72,7 +72,7 @@ class ColourJitter(Augmentation):
 @dataclass
 class SlightRotation(Augmentation):
     """Rotate by a random angle within [-max_degrees, +max_degrees]. For our consistency purposes, we'fe set it to be constant"""
-    max_degrees: float = 15.0
+    max_degrees: float = 10.0
     p: float = 1
     fill: int = 0  # pixel fill value for areas outside original image
 
@@ -89,7 +89,7 @@ class SlightRotation(Augmentation):
 @dataclass
 class GaussianNoise(Augmentation):
     """Add Gaussian noise in pixel space (applied after converting to numpy)."""
-    std: float = 0.05       # noise std relative to [0, 1] pixel range
+    std: float = 0.01       # noise std relative to [0, 1] pixel range
     p: float = 1
     clip: bool = True       # clamp to valid [0, 255] range
 
