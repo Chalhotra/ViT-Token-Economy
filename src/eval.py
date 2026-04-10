@@ -66,7 +66,10 @@ def evaluate_with_topk_predictions(
         for batch in loader:
             images = batch["pixel_values"].to(device, non_blocking=True)
             labels = batch["label"].to(device, non_blocking=True)
-
+            if i == 0:
+                print("Images device:", images.device)
+                print("Model device:", next(model.parameters()).device)
+                
             image_ids = batch.get("image_id")
             gt_labels = batch.get("ground_truth_label")
 
