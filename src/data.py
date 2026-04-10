@@ -114,9 +114,9 @@ def make_collate_fn(transform):
         for b in batch:
             img = b["pixel_values"]
 
-            # convert numpy → PIL if needed
-            if isinstance(img, np.ndarray):
-                img = Image.fromarray(img.astype("uint8"))
+            # ensure PIL
+            if not isinstance(img, Image.Image):
+                img = Image.fromarray(np.asarray(img).astype("uint8"))
 
             imgs.append(transform(img))
 
@@ -129,7 +129,6 @@ def make_collate_fn(transform):
             "image_id": [b["image_id"] for b in batch],
             "ground_truth_label": [b["ground_truth_label"] for b in batch],
         }
-
     return collate_fn
 
 
