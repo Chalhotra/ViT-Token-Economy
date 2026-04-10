@@ -59,7 +59,8 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
         img = example["image"].convert("RGB")
         if aug_pipeline is not None:
             img = aug_pipeline(img)
-        example["pixel_values"] = np.array(img, dtype=np.uint8)
+        # example["pixel_values"] = np.array(img, dtype=np.uint8)
+        example["pixel_values"] = img
         example["image_id"] = f"image_{idx:06d}"
         if label_names is not None:
             example["ground_truth_label"] = label_names[int(example["label"])]
@@ -72,21 +73,37 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
     return ds2, transform
 
 def make_collate_fn(transform):
-    def collate_fn(batch):
-        import numpy as np          # local import — survives pickling
-        from PIL import Image
-        imgs = [Image.fromarray(b["pixel_values"].astype(np.uint8)) for b in batch]
-        pixel_values = torch.stack([transform(img) for img in imgs])
-        labels = torch.tensor([b["label"] for b in batch])
-        image_ids = [b["image_id"] for b in batch]
-        ground_truth_labels = [b["ground_truth_label"] for b in batch]
-        return {
-            "pixel_values": pixel_values,
-            "label": labels,
-            "image_id": image_ids,
-            "ground_truth_label": ground_truth_labels,
-        }
-    return collate_fn
+    # def collate_fn(batch):
+    #     import numpy as np          # local import — survives pickling
+    #     from PIL import Image
+    #     imgs = [Image.fromarray(b["pixel_values"].astype(np.uint8)) for b in batch]
+    #     pixel_values = torch.stack([transform(img) for img in imgs])
+    #     labels = torch.tensor([b["label"] for b in batch])
+    #     image_ids = [b["image_id"] for b in batch]
+    #     ground_truth_labels = [b["ground_truth_label"] for b in batch]
+    #     return {
+    #         "pixel_values": pixel_values,
+    #         "label": labels,
+    #         "image_id": image_ids,
+    #         "ground_truth_label": ground_truth_labels,
+    #     }
+    # return collate_fn
+        def collate_fn(batch):
+            pixel_values = torch.stack([
+                transform(b["pixel_values"]) for b in batch
+            ])
+
+            labels = torch.tensor([b["label"] for b in batch])
+            image_ids = [b["image_id"] for b in batch]
+            ground_truth_labels = [b["ground_truth_label"] for b in batch]
+
+            return {
+                "pixel_values": pixel_values,
+                "label": labels,
+                "image_id": image_ids,
+                "ground_truth_label": ground_truth_labels,
+            }
+        return collate_fn
 
 
 # def build_loader(ds, cfg: DataConfig, collate_fn=None) -> DataLoader:
