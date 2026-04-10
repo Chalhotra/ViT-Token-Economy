@@ -75,7 +75,7 @@ def make_collate_fn(transform):
     def collate_fn(batch):
         import numpy as np          # local import — survives pickling
         from PIL import Image
-        imgs = [Image.fromarray(b["pixel_values"]) for b in batch]
+        imgs = [Image.fromarray(b["pixel_values"].astype(np.uint8)) for b in batch]
         pixel_values = torch.stack([transform(img) for img in imgs])
         labels = torch.tensor([b["label"] for b in batch])
         image_ids = [b["image_id"] for b in batch]
