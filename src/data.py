@@ -69,7 +69,7 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
         return example
 
     ds2 = ds.map(preprocess, with_indices=True, remove_columns=["image"])
-    ds2.set_format("numpy")
+    # ds2.set_format("numpy")
     return ds2, transform
 
 def make_collate_fn(transform):
