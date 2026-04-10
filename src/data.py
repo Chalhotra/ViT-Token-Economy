@@ -5,13 +5,13 @@ import numpy as np
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from timm.data import resolve_data_config, create_transform
-from augmentation import (
-    AugmentationPipeline,
-    all_augmentations,
-    geometric_only,
-    colour_only,
-    no_augmentation,
-)
+# from augmentation import (
+#     AugmentationPipeline,
+#     all_augmentations,
+#     geometric_only,
+#     colour_only,
+#     no_augmentation,
+# )
 @dataclass
 class DataConfig:
     dataset_id: str = "clane9/imagenet-100"
@@ -46,25 +46,18 @@ def load_imagenet100_split(cfg: DataConfig):
             f"Please check your internet connection and dataset availability. "
             f"Original error: {e}"
         ) from e
-def apply_timm_preprocess(ds, transform, aug_pipeline=None):
+def apply_timm_preprocess(ds, transform): # Removed aug_pipeline
     label_names = None
     if hasattr(ds, "features") and "label" in ds.features:
         label_feature = ds.features["label"]
         label_names = getattr(label_feature, "names", None)
 
     def preprocess(example, idx):
-        import numpy as np          # local import — survives pickling
-        from PIL import Image
-
+        # We only do the bare minimum here to keep the CPU fast
         img = example["image"].convert("RGB")
-        if aug_pipeline is not None:
-            img = aug_pipeline(img)
-        example["pixel_values"] = np.array(img)
+        example["pixel_values"] = np.array(img, dtype=np.uint8)
         example["image_id"] = f"image_{idx:06d}"
-        if label_names is not None:
-            example["ground_truth_label"] = label_names[int(example["label"])]
-        else:
-            example["ground_truth_label"] = str(example["label"])
+        example["ground_truth_label"] = label_names[int(example["label"])] if label_names else str(example["label"])
         return example
 
     ds2 = ds.map(preprocess, with_indices=True, remove_columns=["image"])
@@ -73,18 +66,16 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
 
 def make_collate_fn(transform):
     def collate_fn(batch):
-        import numpy as np          # local import — survives pickling
         from PIL import Image
+        # timm transform converts PIL -> Tensor
         imgs = [Image.fromarray(b["pixel_values"]) for b in batch]
         pixel_values = torch.stack([transform(img) for img in imgs])
-        labels = torch.tensor([b["label"] for b in batch])
-        image_ids = [b["image_id"] for b in batch]
-        ground_truth_labels = [b["ground_truth_label"] for b in batch]
+        
         return {
             "pixel_values": pixel_values,
-            "label": labels,
-            "image_id": image_ids,
-            "ground_truth_label": ground_truth_labels,
+            "label": torch.tensor([b["label"] for b in batch]),
+            "image_id": [b["image_id"] for b in batch],
+            "ground_truth_label": [b["ground_truth_label"] for b in batch],
         }
     return collate_fn
 

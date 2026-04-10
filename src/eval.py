@@ -11,7 +11,7 @@ class EvalConfig:
     warmup_batches: int = 0  # notebook did no warmup; keep 0 to match functionality
     max_batches: Optional[int] = None
 
-def evaluate_accuracy_latency_throughput(model: torch.nn.Module, loader, device: str, cfg: EvalConfig = EvalConfig()) -> Dict[str, float]:
+def evaluate_accuracy_latency_throughput(model: torch.nn.Module, loader, device: str, cfg: EvalConfig = EvalConfig(), aug_pipeline=None) -> Dict[str, float]:
     model.eval()
 
     correct = 0
@@ -29,7 +29,8 @@ def evaluate_accuracy_latency_throughput(model: torch.nn.Module, loader, device:
             outputs = model(images)
             cuda_sync(device)
             end = time.perf_counter()
-
+            if aug_pipeline is not None:
+                images = aug_pipeline(images)
             # Match notebook behavior: always count timing + accuracy for all batches
             total_time += (end - start)
             preds = outputs.argmax(dim=1)
@@ -53,6 +54,7 @@ def evaluate_with_topk_predictions(
     class_names: Sequence[str],
     topk: int = 10,
     cfg: EvalConfig = EvalConfig(),
+    aug_pipeline=None
 ) -> Tuple[Dict[str, float], List[Dict[str, object]]]:
     model.eval()
 
@@ -69,12 +71,13 @@ def evaluate_with_topk_predictions(
 
             image_ids = batch.get("image_id")
             gt_labels = batch.get("ground_truth_label")
-
             cuda_sync(device)
             start = time.perf_counter()
             outputs = model(images)
             cuda_sync(device)
             end = time.perf_counter()
+            if aug_pipeline is not None:
+                images = aug_pipeline(images)
 
             total_time += (end - start)
 
