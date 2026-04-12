@@ -5,13 +5,7 @@ import numpy as np
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from timm.data import resolve_data_config, create_transform
-from augmentation import (
-    AugmentationPipeline,
-    all_augmentations,
-    geometric_only,
-    colour_only,
-    no_augmentation,
-)
+
 @dataclass
 class DataConfig:
     dataset_id: str = "clane9/imagenet-100"
@@ -19,11 +13,10 @@ class DataConfig:
     batch_size: int = 64
     num_workers: int = 2
     pin_memory: bool = False
-    shuffle: bool = False  # eval: keep False
+    shuffle: bool = False
 
 def build_transform_for_model(model):
     cfg = resolve_data_config({}, model=model)
-    # Match notebook: use model's recommended eval preprocessing
     return create_transform(**cfg, is_training=False)
 
 def load_imagenet100_split(cfg: DataConfig):
@@ -72,39 +65,6 @@ def apply_timm_preprocess(ds, transform, aug_pipeline=None):
     # ds2.set_format("numpy")
     return ds2, transform
 
-# def make_collate_fn(transform):
-#     # def collate_fn(batch):
-#     #     import numpy as np          # local import — survives pickling
-#     #     from PIL import Image
-#     #     imgs = [Image.fromarray(b["pixel_values"].astype(np.uint8)) for b in batch]
-#     #     pixel_values = torch.stack([transform(img) for img in imgs])
-#     #     labels = torch.tensor([b["label"] for b in batch])
-#     #     image_ids = [b["image_id"] for b in batch]
-#     #     ground_truth_labels = [b["ground_truth_label"] for b in batch]
-#     #     return {
-#     #         "pixel_values": pixel_values,
-#     #         "label": labels,
-#     #         "image_id": image_ids,
-#     #         "ground_truth_label": ground_truth_labels,
-#     #     }
-#     # return collate_fn
-#         def collate_fn(batch):
-#             pixel_values = torch.stack([
-#                 transform(b["pixel_values"]) for b in batch
-#             ])
-
-#             labels = torch.tensor([b["label"] for b in batch])
-#             image_ids = [b["image_id"] for b in batch]
-#             ground_truth_labels = [b["ground_truth_label"] for b in batch]
-
-#             return {
-#                 "pixel_values": pixel_values,
-#                 "label": labels,
-#                 "image_id": image_ids,
-#                 "ground_truth_label": ground_truth_labels,
-#             }
-#         return collate_fn
-
 def make_collate_fn(transform):
     def collate_fn(batch):
         import numpy as np
@@ -114,7 +74,6 @@ def make_collate_fn(transform):
         for b in batch:
             img = b["pixel_values"]
 
-            # ensure PIL
             if not isinstance(img, Image.Image):
                 img = Image.fromarray(np.asarray(img).astype("uint8"))
 
@@ -130,18 +89,6 @@ def make_collate_fn(transform):
             "ground_truth_label": [b["ground_truth_label"] for b in batch],
         }
     return collate_fn
-
-
-# def build_loader(ds, cfg: DataConfig, collate_fn=None) -> DataLoader:
-#     return DataLoader(
-#         ds,
-#         batch_size=cfg.batch_size,
-#         shuffle=cfg.shuffle,
-#         num_workers=cfg.num_workers,
-#         pin_memory=cfg.pin_memory,
-#         collate_fn=collate_fn,
-#         persistent_workers=cfg.num_workers > 0,
-#     )
 
 def build_loader(ds, cfg: DataConfig, collate_fn=None) -> DataLoader:
     """Build DataLoader with custom collate function.

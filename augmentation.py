@@ -86,27 +86,6 @@ class SlightRotation(Augmentation):
         return f"SlightRotation(max_degrees={self.max_degrees}, p={self.p})"
 
 
-@dataclass
-class GaussianNoise(Augmentation):
-    """Add Gaussian noise in pixel space (applied after converting to numpy)."""
-    std: float = 0.01       # noise std relative to [0, 1] pixel range
-    p: float = 1
-    clip: bool = True       # clamp to valid [0, 255] range
-
-    def __call__(self, img: Image.Image) -> Image.Image:
-        if random.random() < self.p:
-            arr = np.array(img, dtype=np.float32) / 255.0
-            noise = np.random.normal(0, self.std, arr.shape).astype(np.float32)
-            arr = arr + noise
-            if self.clip:
-                arr = np.clip(arr, 0.0, 1.0)
-            return Image.fromarray((arr * 255).astype(np.uint8))
-        return img
-
-    def __repr__(self) -> str:
-        return f"GaussianNoise(std={self.std}, p={self.p})"
-
-
 # ──────────────────────────────────────────────
 # Pipeline composer
 # ──────────────────────────────────────────────
@@ -137,7 +116,6 @@ def all_augmentations() -> AugmentationPipeline:
         HorizontalFlip(p=0.5),
         ColourJitter(p=0.8),
         SlightRotation(max_degrees=15.0, p=0.5),
-        GaussianNoise(std=0.05, p=0.5),
     ])
 
 def horizontal_flip_only() -> AugmentationPipeline:
@@ -156,16 +134,10 @@ def jitter_only() -> AugmentationPipeline:
         ColourJitter(),
     ])
 
-def gaussian_noise_only() -> AugmentationPipeline:
-    return AugmentationPipeline([
-        GaussianNoise(std=1),
-    ])
-
 def colour_only() -> AugmentationPipeline:
     """Only photometric augmentations."""
     return AugmentationPipeline([
         ColourJitter(p=0.8),
-        GaussianNoise(std=0.05, p=0.5),
     ])
 def geometric_only() -> AugmentationPipeline:
     """Only spatial augmentations — useful for colour-sensitive experiments."""

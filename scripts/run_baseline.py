@@ -22,7 +22,6 @@ def main():
     ap.add_argument("--split", type=str, default="validation")
     ap.add_argument("--seed", type=int, default=42)
 
-    # TopK pruning flags (NEW)
     ap.add_argument("--topk", action="store_true", help="enable Top-K token pruning")
     ap.add_argument(
         "--keep-rate",
