@@ -1,6 +1,6 @@
 # ViT Token Economy (ImageNet-100)
 
-A config-driven pipeline for evaluating **token economy methods** on Vision Transformers using ImageNet-100. Starting from pretrained ViT/DeiT baselines, the project implements and compares several strategies for reducing the number of tokens processed at each layer:
+A config-driven pipeline for evaluating **token economy methods** on Vision Transformers using ImageNet-100. Starting from pretrained ViT/DeiT baselines, the project implements and compares several strategies for reducing the number of tokens processed at each layer, and measures how each method interacts with input augmentation:
 
 | Method | Description |
 |--------|-------------|
@@ -12,9 +12,10 @@ A config-driven pipeline for evaluating **token economy methods** on Vision Tran
 
 Core features:
 - Loads **ImageNet-100** from Hugging Face (`clane9/imagenet-100`)
-- Uses `timm` pretrained models (ViT-Tiny, DeiT-Tiny, and others)
+- Uses `timm` pretrained models (ViT-Tiny, ViT-Base, DeiT-Tiny, and others)
 - Replaces the 1000-class head with a 100-class head by copying the corresponding rows
 - Evaluates **top-1 accuracy**, **throughput**, **latency**, and **FLOPs**
+- Custom **augmentation pipeline** (horizontal flip, colour jitter, slight rotation) applied at evaluation time to study robustness
 
 ## Quickstart (Local/Kaggle)
 
@@ -55,6 +56,12 @@ python scripts/run_baseline.py --model deit_tiny_patch16_224 \
    - EViT: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/04_evit_testing.ipynb)
    - ToMe: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/05_tome_testing.ipynb)
    - EViT + ToMe: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/06_evit_tome_testing.ipynb)
+   - EViT + ToMe (Augmentation): [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/07_evit_tome_testing_augmentation.ipynb)
+   - Baseline Augmentation Sweep: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/08_baseline_augmentation_testing.ipynb)
+   - EViT Augmentation Sweep: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/09_evit_testing_augmentation.ipynb)
+   - ToMe Augmentation Sweep: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/10_tome_testing_augmentation.ipynb)
+   - Hybrid (No Augmentation): [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/11_hybrid_no_augmentation_testing.ipynb)
+   - Baseline (No Augmentation): [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/12_baseline_no_augmentation.ipynb)
 2. Run the setup cell to clone the repository
    - For **public repos**: No token needed
    - For **private repos**: You'll be prompted for a GitHub token (or set `GITHUB_TOKEN` in Colab secrets)
@@ -70,6 +77,38 @@ python scripts/run_baseline.py --model deit_tiny_patch16_224 \
 | `04_evit_testing.ipynb` | EViT token fusion evaluation and visualization |
 | `05_tome_testing.ipynb` | ToMe bipartite soft-matching merging evaluation |
 | `06_evit_tome_testing.ipynb` | Hybrid EViT + ToMe strategy evaluation |
+| `07_evit_tome_testing_augmentation.ipynb` | EViT + ToMe hybrid with augmentation sweep and two-stage visualizations |
+| `08_baseline_augmentation_testing.ipynb` | Baseline augmentation sweep (ViT-Tiny & ViT-Base × 3 augmentations) |
+| `09_evit_testing_augmentation.ipynb` | EViT token fusion augmentation sweep |
+| `10_tome_testing_augmentation.ipynb` | ToMe merging augmentation sweep |
+| `11_hybrid_no_augmentation_testing.ipynb` | EViT + ToMe hybrid sweep without augmentation |
+| `12_baseline_no_augmentation.ipynb` | Baseline (no augmentation) with CSV-logging for per-prediction analysis |
+| `RAD(Relative Accuracy Degradation) calculation.ipynb` | Computes Relative Accuracy Degradation across all methods and keep rates |
+
+## Augmentation
+
+The project includes a custom augmentation module (`augmentation.py`) for evaluating the robustness of each token economy method under distribution shift.
+
+### Available Augmentations
+
+| Class | Description |
+|-------|-------------|
+| `HorizontalFlip` | Random horizontal flip |
+| `ColourJitter` | Random brightness, contrast, saturation, and hue jitter |
+| `SlightRotation` | Rotation by a fixed angle within a configurable range |
+| `AugmentationPipeline` | Chains any sequence of augmentations in order |
+
+### Preset Pipelines
+
+| Function | Pipeline |
+|----------|----------|
+| `all_augmentations()` | Flip → ColourJitter → SlightRotation |
+| `horizontal_flip_only()` | HorizontalFlip only |
+| `rotation_only()` | SlightRotation only |
+| `jitter_only()` | ColourJitter only |
+| `colour_only()` | ColourJitter (photometric only) |
+| `geometric_only()` | HorizontalFlip + SlightRotation (spatial only) |
+| `no_augmentation()` | Identity pipeline — baseline / eval mode |
 
 ## Outputs
 
@@ -97,6 +136,7 @@ ViT-Token-Economy/
 │       ├── tome.py              # ToMe bipartite token merging
 │       ├── evit_tome.py         # Hybrid EViT + ToMe
 │       └── random_drop.py       # Random token dropping baseline
+├── augmentation.py              # Custom augmentation classes and preset pipelines
 ├── scripts/
 │   └── run_baseline.py          # CLI entry point
 ├── notebooks/                   # Colab-ready experiment notebooks
@@ -105,7 +145,14 @@ ViT-Token-Economy/
 │   ├── 03_random_masking_testing.ipynb
 │   ├── 04_evit_testing.ipynb
 │   ├── 05_tome_testing.ipynb
-│   └── 06_evit_tome_testing.ipynb
+│   ├── 06_evit_tome_testing.ipynb
+│   ├── 07_evit_tome_testing_augmentation.ipynb
+│   ├── 08_baseline_augmentation_testing.ipynb
+│   ├── 09_evit_testing_augmentation.ipynb
+│   ├── 10_tome_testing_augmentation.ipynb
+│   ├── 11_hybrid_no_augmentation_testing.ipynb
+│   ├── 12_baseline_no_augmentation.ipynb
+│   └── RAD(Relative Accuracy Degradation) calculation.ipynb
 ├── tests/                       # Unit tests
 │   ├── test_models.py           # Model creation and head adaptation
 │   ├── test_imagenet_mapping.py # ImageNet-100 mapping validation
