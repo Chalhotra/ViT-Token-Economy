@@ -6,7 +6,15 @@ src/eval.py
 src/imagenet_mapping.py
 src/models.py
 src/utils.py
-src/models/topk.py
+src/test_models/__init__.py
+src/test_models/evit.py
+src/test_models/evit_tome.py
+src/test_models/random_drop.py
+src/test_models/tome.py
+src/test_models/topk.py
+tests/test_imagenet_mapping.py
+tests/test_models.py
+tests/test_utils.py
 vit_deit_baselines.egg-info/PKG-INFO
 vit_deit_baselines.egg-info/SOURCES.txt
 vit_deit_baselines.egg-info/dependency_links.txt

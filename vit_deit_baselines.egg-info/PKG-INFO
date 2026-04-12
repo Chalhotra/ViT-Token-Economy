@@ -12,30 +12,118 @@ Requires-Dist: requests
 Requires-Dist: tqdm
 Requires-Dist: fvcore
 
-# ViT/DeiT Tiny baselines (ImageNet-100)
+# ViT Token Economy (ImageNet-100)
 
-This repo reimplements your notebook as a clean, config-driven pipeline with **no change in functionality**:
-- Loads **ImageNet-100 validation** from Hugging Face (`clane9/imagenet-100`)
-- Uses `timm`'s `resolve_data_config` + `create_transform` (eval transforms)
-- Creates a **pretrained ImageNet-1K model** (ViT-Tiny or DeiT-Tiny)
-- Replaces the 1000-class head with a 100-class head by **copying the corresponding rows** using a `new_to_old_map`
-- Evaluates **top-1 accuracy**, **throughput**, **latency**
-- Computes **FLOPs** with `fvcore`
+A config-driven pipeline for evaluating **token economy methods** on Vision Transformers using ImageNet-100. Starting from pretrained ViT/DeiT baselines, the project implements and compares several strategies for reducing the number of tokens processed at each layer:
 
-## Quickstart (Colab/Kaggle)
+| Method | Description |
+|--------|-------------|
+| **Top-K Pruning** | Keeps the highest CLS-attention tokens; drops the rest |
+| **EViT (Token Fusion)** | Keeps top-K tokens and fuses the remainder into a single extra token |
+| **ToMe (Token Merging)** | Bipartite soft-matching that merges the most similar token pairs |
+| **EViT + ToMe (Hybrid)** | Two-stage: EViT fusion followed by ToMe merging |
+| **Random Drop** | Random token dropping baseline for comparison |
+
+Core features:
+- Loads **ImageNet-100** from Hugging Face (`clane9/imagenet-100`)
+- Uses `timm` pretrained models (ViT-Tiny, DeiT-Tiny, and others)
+- Replaces the 1000-class head with a 100-class head by copying the corresponding rows
+- Evaluates **top-1 accuracy**, **throughput**, **latency**, and **FLOPs**
+
+## Quickstart (Local/Kaggle)
 
 ```bash
-git clone <your-repo-url>
-cd <repo-folder>
+git clone https://github.com/Chalhotra/ViT-Token-Economy.git
+cd ViT-Token-Economy
 pip install -r requirements.txt
 pip install -e .
+
+# Baseline evaluation (no pruning)
 python scripts/run_baseline.py --model vit_tiny_patch16_224
 python scripts/run_baseline.py --model deit_tiny_patch16_224
+
+# Top-K pruning with 70% keep rate at blocks 3, 6, 9
+python scripts/run_baseline.py --model deit_tiny_patch16_224 \
+    --topk --keep-rate 0.7 --reduction-loc "3,6,9"
 ```
 
+### CLI Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model` | *(required)* | `timm` model ID (e.g. `vit_tiny_patch16_224`, `deit_tiny_patch16_224`) |
+| `--batch-size` | `64` | Batch size for evaluation |
+| `--split` | `validation` | Dataset split |
+| `--seed` | `42` | Random seed |
+| `--topk` | off | Enable Top-K token pruning |
+| `--keep-rate` | `1.0` | Keep rate(s); single value or list aligned with `--reduction-loc` |
+| `--reduction-loc` | `""` | Comma-separated block indices for pruning (e.g. `"3,6,9"`) |
+| `--no-exp-keep-rate` | off | Disable exponentiating a single keep-rate across reduction locations |
+
+## Quickstart (Google Colab)
+
+1. Open a notebook:
+   - Baseline: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/01_baseline.ipynb)
+   - Top-K: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/02_topk_testing.ipynb)
+   - Random Masking: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/03_random_masking_testing.ipynb)
+   - EViT: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/04_evit_testing.ipynb)
+   - ToMe: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/05_tome_testing.ipynb)
+   - EViT + ToMe: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Chalhotra/ViT-Token-Economy/blob/main/notebooks/06_evit_tome_testing.ipynb)
+2. Run the setup cell to clone the repository
+   - For **public repos**: No token needed
+   - For **private repos**: You'll be prompted for a GitHub token (or set `GITHUB_TOKEN` in Colab secrets)
+3. Run the remaining cells to evaluate models
+
+## Notebooks
+
+| Notebook | Description |
+|----------|-------------|
+| `01_baseline.ipynb` | Baseline evaluation of ViT/DeiT models on ImageNet-100 |
+| `02_topk_testing.ipynb` | Top-K token pruning across different keep rates with visualizations |
+| `03_random_masking_testing.ipynb` | Random token dropping baseline with visualization |
+| `04_evit_testing.ipynb` | EViT token fusion evaluation and visualization |
+| `05_tome_testing.ipynb` | ToMe bipartite soft-matching merging evaluation |
+| `06_evit_tome_testing.ipynb` | Hybrid EViT + ToMe strategy evaluation |
+
 ## Outputs
-Prints:
-- Accuracy (%)
-- Throughput (images/sec)
-- Latency (ms/image)
-- FLOPs (GFLOPs) for a single image
+
+- **Accuracy** — top-1 accuracy (%)
+- **Throughput** — images per second
+- **Latency** — milliseconds per image
+- **FLOPs** — GFLOPs for a single 3×224×224 image
+- **Params** — total model parameters
+
+Notebooks additionally produce per-layer visualizations of token retention, fusion, and merging patterns.
+
+## Project Structure
+
+```
+ViT-Token-Economy/
+├── src/                          # Core modules
+│   ├── data.py                  # Dataset loading and preprocessing
+│   ├── models.py                # Model creation and head adaptation
+│   ├── eval.py                  # Accuracy, throughput, latency, FLOPs
+│   ├── imagenet_mapping.py      # ImageNet-100 ↔ ImageNet-1K mapping
+│   ├── utils.py                 # Device, seeding, parameter counting
+│   └── test_models/             # Token economy methods
+│       ├── topk.py              # Top-K attention-based pruning
+│       ├── evit.py              # EViT token fusion
+│       ├── tome.py              # ToMe bipartite token merging
+│       ├── evit_tome.py         # Hybrid EViT + ToMe
+│       └── random_drop.py       # Random token dropping baseline
+├── scripts/
+│   └── run_baseline.py          # CLI entry point
+├── notebooks/                   # Colab-ready experiment notebooks
+│   ├── 01_baseline.ipynb
+│   ├── 02_topk_testing.ipynb
+│   ├── 03_random_masking_testing.ipynb
+│   ├── 04_evit_testing.ipynb
+│   ├── 05_tome_testing.ipynb
+│   └── 06_evit_tome_testing.ipynb
+├── tests/                       # Unit tests
+│   ├── test_models.py           # Model creation and head adaptation
+│   ├── test_imagenet_mapping.py # ImageNet-100 mapping validation
+│   └── test_utils.py            # Utility function tests
+├── requirements.txt             # Dependencies
+└── pyproject.toml               # Package configuration
+```
